@@ -56,6 +56,8 @@ CLICK_COOLDOWN = 0.4                      # min seconds between clicks of the sa
 PINCH_ON_RATIO = 0.25                     # fingertip distance / hand size below which a pinch STARTS
 PINCH_OFF_RATIO = 0.35                    # ...and above which it ENDS (hysteresis stops flicker)
 
+PINCH_TIGHT_RATIO = 0.15                  # a pinch this tight always counts, even in a fist-like pose
+
 SCROLL_SENSITIVITY = 4                    # bigger = slower scroll
 SCROLL_DEADZONE = 8                       # pixels of hand movement ignored to avoid jitter-scroll
 SCREEN_EDGE_MARGIN = 5                    # keep cursor this many px away from screen edges so
@@ -261,8 +263,19 @@ class GestureMouseController:
 
         # Hysteresis: easier to stay pinched than to start a pinch
         left_now = ratio_left < (PINCH_OFF_RATIO if self.left_pinched else PINCH_ON_RATIO)
-        right_now = (not left_now) and \
-            ratio_right < (PINCH_OFF_RATIO if self.right_pinched else PINCH_ON_RATIO)
+        right_now = ratio_right < (PINCH_OFF_RATIO if self.right_pinched else PINCH_ON_RATIO)
+
+        # FIX: index and middle tips are neighbours, so the thumb is often "close"
+        # to both. Resolve the tie instead of always letting left click win.
+        if left_now and right_now:
+            if self.left_pinched:            # keep whichever pinch is already held
+                right_now = False
+            elif self.right_pinched:
+                left_now = False
+            elif ratio_right < ratio_left:   # otherwise the closer fingertip wins
+                left_now = False
+            else:
+                right_now = False
 
         if left_now and not self.left_pinched and now - self.last_left_click_time > CLICK_COOLDOWN:
             pyautogui.click()
@@ -322,7 +335,14 @@ class GestureMouseController:
             # Wrist -> middle knuckle: a stable measure of hand size in pixels
             hand_size = max(pixel_distance(landmarks_px[0], landmarks_px[9]), 1.0)
 
-            if is_fist(landmarks):
+            # FIX: a very tight fingertip pinch is deliberate, even if the other
+            # fingers are curled and the hand otherwise looks like a fist.
+            tight_pinch = min(
+                pixel_distance(thumb_px, index_px),
+                pixel_distance(thumb_px, middle_px),
+            ) / hand_size < PINCH_TIGHT_RATIO
+
+            if is_fist(landmarks) and not tight_pinch:
                 # FIX: a fist brings the thumb next to the fingers and used to
                 # trigger phantom clicks. Fist is always idle.
                 self.release_pinches()
